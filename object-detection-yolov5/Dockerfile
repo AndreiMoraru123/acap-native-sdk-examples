@@ -26,20 +26,10 @@ RUN . /opt/venv/bin/activate && pip install --no-cache-dir tensorflow
 # Get YOLOv5 model and labels
 #-------------------------------------------------------------------------------
 
-# Download pre-trained YOLOv5 model
+# Use YOLOv8 licese plate model
 WORKDIR /opt/app/model
+COPY ./Reader.tflite model.tflite
 ARG CHIP=artpec8
-ARG MODEL_BUCKET=https://acap-ml-models.s3.amazonaws.com/yolov5
-RUN if [ "$CHIP" = cpu ] || [ "$CHIP" = artpec8 ]; then \
-        curl -L -o model.tflite \
-        $MODEL_BUCKET/yolov5n_artpec8_coco_640.tflite ; \
-    elif [ "$CHIP" = artpec9 ]; then \
-        curl -L -o model.tflite \
-        $MODEL_BUCKET/yolov5n_artpec9_coco_640.tflite ; \
-    else \
-        printf "Error: '%s' is not a valid value for the CHIP variable\n", "$CHIP"; \
-        exit 1; \
-    fi
 
 # Download labels for model
 WORKDIR /opt/app/label
