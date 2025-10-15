@@ -26,15 +26,14 @@ RUN . /opt/venv/bin/activate && pip install --no-cache-dir tensorflow
 # Get YOLOv5 model and labels
 #-------------------------------------------------------------------------------
 
-# Use YOLOv8 licese plate model
+# Use YOLOv8 license plate model
 WORKDIR /opt/app/model
 COPY ./Reader.tflite model.tflite
 ARG CHIP=artpec8
 
-# Download labels for model
+# Use created labels for model
 WORKDIR /opt/app/label
-RUN curl -L -o labels.txt \
-    https://github.com/google-coral/test_data/raw/master/coco_labels.txt
+COPY ./labels_license_plate.txt labels.txt
 
 #-------------------------------------------------------------------------------
 # Build ACAP application
