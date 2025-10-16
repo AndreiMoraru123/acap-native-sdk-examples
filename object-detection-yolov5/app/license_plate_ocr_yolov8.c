@@ -170,13 +170,6 @@ static void parse_licence_plate(uint8_t* tensor,
             }
         }
 
-        syslog(LOG_INFO,
-               "Pos[%d]: predicted_class=%d, prob=%.4f, in_range=%s",
-               pos,
-               best_class_idx,
-               max_prob,
-               (best_class_idx < (int)num_labels) ? "YES" : "NO");
-
         if (best_class_idx > 0 && best_class_idx < (int)num_labels && max_prob > 0.8) {
             char* predicted_char = labels[best_class_idx];
             if (predicted_char && strlen(predicted_char) > 0) {
