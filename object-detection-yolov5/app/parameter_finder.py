@@ -17,31 +17,36 @@ limitations under the License.
 """
 Check your model quantization parameters and save them to file
 """
-import tensorflow as tf
 import sys
+
+import tensorflow as tf
 
 if len(sys.argv) > 1:
     model_path = sys.argv[1]
 else:
-    print("Error: No model path provided as parameter. Please provide a path "
-          "as a command-line argument.")
+    print(
+        "Error: No model path provided as parameter. Please provide a path "
+        "as a command-line argument."
+    )
     exit(1)
 
 output_file = "model_params.h"
 interpreter = tf.lite.Interpreter(model_path)
 interpreter.allocate_tensors()
 output_details = interpreter.get_output_details()
-input_details  = interpreter.get_input_details()
+input_details = interpreter.get_input_details()
 
 # The input format should be (batch, height, width, channel) but better verify
 # with a test in case width and height are flipped.
 model_input_height = input_details[0]["shape"][1]
-model_input_width  = input_details[0]["shape"][2]
+model_input_width = input_details[0]["shape"][2]
 
-quantization_scale, quantization_zero_point = output_details[0]['quantization']
-num_classes    = output_details[0]['shape'][2] - 5 # Removing 5 values that are
-                                                   # x,y,w,h,obj_conf
-num_detections = output_details[0]['shape'][1]
+quantization_scale, quantization_zero_point = output_details[0]["quantization"]
+num_classes = output_details[0]["shape"][2]
+num_detections = output_details[0]["shape"][1]
+
+print("num_classes", num_classes)
+print("num_detections", num_detections)
 
 with open(output_file, "w") as f:
     f.write(f"#ifndef MODEL_PARAMS_H\n")
