@@ -119,11 +119,6 @@ img_provider_t* create_img_provider(unsigned int width,
         panic("%s: Failed to create vdo_map", __func__);
     }
 
-    vdo_map_set_uint32(vdo_settings, "x", 2500);  // (3840)
-    vdo_map_set_uint32(vdo_settings, "y", 1000);  // (2160)
-    vdo_map_set_uint32(vdo_settings, "width", 800);
-    vdo_map_set_uint32(vdo_settings, "height", 800);
-
     // Set input so the image is taken from the fist sensor channel
     vdo_map_set_uint32(vdo_settings, "input", VDO_INPUT_CHANNEL);
     // If channel is used it corresponds to the camera keyword in the rtsp url

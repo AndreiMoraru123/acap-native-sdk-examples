@@ -286,7 +286,7 @@ int main(int argc, char** argv) {
                                            VDO_FORMAT_RGB,
                                            args.model_file,
                                            args.device_name,
-                                           false,
+                                           true,
                                            &number_output_tensors);
     if (!model_provider) {
         panic("%s: Could not create model provider", __func__);
