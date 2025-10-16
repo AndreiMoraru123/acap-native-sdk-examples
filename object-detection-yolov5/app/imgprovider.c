@@ -127,6 +127,11 @@ img_provider_t* create_img_provider(unsigned int width,
     // channel = 0 corresponds the overview keyword in the rtsp url
     // vdo_map_set_uint32(vdoMap, "channel", 1);
 
+    vdo_map_set_uint32(vdo_settings, "x", 2400);
+    vdo_map_set_uint32(vdo_settings, "y", 250);
+    vdo_map_set_uint32(vdo_settings, "width", 1000);
+    vdo_map_set_uint32(vdo_settings, "height", 1000);
+
     // format is the image format that is supplied from vdo
     vdo_map_set_uint32(vdo_settings, "format", format);
     vdo_map_set_uint32(vdo_settings, "width", width);
