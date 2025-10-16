@@ -159,10 +159,10 @@ static void parse_licence_plate(uint8_t* tensor,
 
         float max_prob     = -1.0f;
         int best_class_idx = -1;
-        for (int cls = 0; cls < num_classes; cls++) {
-            int tensor_idx = pos * num_classes + cls;  // flattened tensor index
 
-            float probability = (tensor[tensor_idx] - qt_zero_point) * qt_scale;  // de-quantize
+        for (int cls = 0; cls < num_classes; cls++) {
+            int tensor_idx    = pos * num_classes + cls;
+            float probability = (tensor[tensor_idx] - qt_zero_point) * qt_scale;
 
             if (probability > max_prob) {
                 max_prob       = probability;
@@ -170,16 +170,15 @@ static void parse_licence_plate(uint8_t* tensor,
             }
         }
 
-        if (best_class_idx > 0 && best_class_idx < (int)num_labels && max_prob > 0.8) {
-            char* predicted_char = labels[best_class_idx];
-            if (predicted_char && strlen(predicted_char) > 0) {
-                if (string_idx == 0 || plate_string[string_idx - 1] != predicted_char[0]) {
-                    plate_string[string_idx++] = predicted_char[0];
-                    plate_string[string_idx]   = '\0';
-                }
-            }
+        if (max_prob < 0.5 || best_class_idx < 0 || best_class_idx >= (int)num_labels) {
+            continue;
         }
+
+        char predicted_char        = labels[best_class_idx][0];
+        plate_string[string_idx++] = predicted_char;
+        plate_string[string_idx]   = '\0';
     }
+
     syslog(LOG_INFO, "Detected license plate: %s", plate_string);
 }
 
@@ -279,7 +278,7 @@ int main(int argc, char** argv) {
                                            VDO_FORMAT_RGB,
                                            args.model_file,
                                            args.device_name,
-                                           false,
+                                           true,
                                            &number_output_tensors);
     if (!model_provider) {
         panic("%s: Could not create model provider", __func__);
@@ -489,4 +488,3 @@ end:
 
     return 0;
 }
-
