@@ -3,7 +3,7 @@ OBJS1	= $(PROG1).c argparse.c imgprovider.c model.c panic.c labelparse.c
 PROGS	= $(PROG1)
 DEBUG_DIR = debug
 
-PKGS = axparameter cairo gio-2.0 gio-unix-2.0 liblarod vdostream
+PKGS = axparameter bbox cairo gio-2.0 gio-unix-2.0 liblarod vdostream
 
 CFLAGS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags $(PKGS))
 LDLIBS += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs $(PKGS))

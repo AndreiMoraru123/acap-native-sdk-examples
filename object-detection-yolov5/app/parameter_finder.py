@@ -42,11 +42,8 @@ model_input_height = input_details[0]["shape"][1]
 model_input_width = input_details[0]["shape"][2]
 
 quantization_scale, quantization_zero_point = output_details[0]["quantization"]
-num_classes = output_details[0]["shape"][2]
-num_detections = output_details[0]["shape"][1]
-
-print("num_classes", num_classes)
-print("num_detections", num_detections)
+num_detections = output_details[0]["shape"][2]
+num_classes = output_details[0]["shape"][1] - 4  # minus bbox coords
 
 with open(output_file, "w") as f:
     f.write(f"#ifndef MODEL_PARAMS_H\n")

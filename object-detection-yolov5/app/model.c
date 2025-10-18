@@ -316,8 +316,17 @@ static larodModel* create_preprocessing_model(model_provider_t* provider,
         }
         unsigned int clip_w = (unsigned int)crop_w;
         unsigned int clip_h = (unsigned int)crop_h;
-        unsigned int clip_x = (stream_width - clip_w) / 2;
-        unsigned int clip_y = (stream_height - clip_h) / 2;
+        unsigned int clip_x = (unsigned int)((stream_width - clip_w) * 0.6f);
+        unsigned int clip_y = (unsigned int)((stream_height - clip_h) * 0.4f);
+
+        if (clip_x + clip_w > stream_width) {
+            clip_x = stream_width - clip_w;
+        }
+
+        if (clip_y + clip_h > stream_height) {
+            clip_y = stream_height - clip_h;
+        }
+
         syslog(LOG_INFO, "Crop input image X=%d Y=%d (%d x %d)", clip_x, clip_y, clip_w, clip_h);
         provider->crop_map = larodCreateMap(&error);
         if (!provider->crop_map) {

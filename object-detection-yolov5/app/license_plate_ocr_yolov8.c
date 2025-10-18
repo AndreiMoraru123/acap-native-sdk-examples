@@ -41,8 +41,10 @@
 #include "vdo-types.h"
 #include <axoverlay.h>
 #include <axsdk/axparameter.h>
+#include <bbox.h>
 #include <bits/pthreadtypes.h>
 #include <errno.h>
+#include <math.h>
 
 #include <cairo/cairo.h>
 #include <glib-unix.h>
@@ -78,12 +80,202 @@ typedef struct model_params {
     int size_per_detection;
 } model_params_t;
 
+static int ax_parameter_get_int(AXParameter* handle, const char* name) {
+    gchar* str_value = NULL;
+    GError* error    = NULL;
+    int value;
+
+    // Get the value of the parameter
+    if (!ax_parameter_get(handle, name, &str_value, &error)) {
+        panic("%s", error->message);
+    }
+
+    // Convert the parameter value to int
+    if (sscanf(str_value, "%d", &value) != 1) {
+        panic("Axparameter %s was not an int", name);
+    }
+
+    syslog(LOG_INFO, "Axparameter %s: %s", name, str_value);
+
+    g_free(str_value);
+
+    return value;
+}
+
 static void* run_glib_main_loop(void* arg) {
     (void)arg;
     syslog(LOG_INFO, "Starting GLib main loop in background thread");
     g_main_loop_run(g_main_loop);
     syslog(LOG_INFO, "GLib main loop exited");
     return NULL;
+}
+
+static bbox_t* setup_bbox(void) {
+    // Create box drawers
+    bbox_t* bbox = bbox_view_new(1u);
+    if (!bbox) {
+        panic("Failed to create box drawer");
+    }
+
+    bbox_clear(bbox);
+    const bbox_color_t red = bbox_color_from_rgb(0xff, 0x00, 0x00);
+
+    bbox_style_outline(bbox);   // Switch to outline style
+    bbox_thickness_thin(bbox);  // Switch to thin lines
+    bbox_color(bbox, red);      // Switch to red
+
+    return bbox;
+}
+
+static void
+find_corners(float x, float y, float w, float h, float* x1, float* y1, float* x2, float* y2) {
+    *x1 = fmax(0.0, x - (w / 2));
+    *y1 = fmax(0.0, y - (h / 2));
+    *x2 = fmin(1.0, x + (w / 2));
+    *y2 = fmin(1.0, y + (h / 2));
+}
+
+static void determine_bbox_coordinates(uint8_t* tensor,
+                                       int detection_idx,
+                                       int size_per_detection,
+                                       float qt_zero_point,
+                                       float qt_scale,
+                                       float* x1,
+                                       float* y1,
+                                       float* x2,
+                                       float* y2) {
+    // Get coordinates for the object
+    float x = (tensor[size_per_detection * detection_idx + 0] - qt_zero_point) * qt_scale;
+    float y = (tensor[size_per_detection * detection_idx + 1] - qt_zero_point) * qt_scale;
+    float w = (tensor[size_per_detection * detection_idx + 2] - qt_zero_point) * qt_scale;
+    float h = (tensor[size_per_detection * detection_idx + 3] - qt_zero_point) * qt_scale;
+    find_corners(x, y, w, h, x1, y1, x2, y2);
+}
+
+static float intersection_over_union(float x1,
+                                     float y1,
+                                     float w1,
+                                     float h1,
+                                     float x2,
+                                     float y2,
+                                     float w2,
+                                     float h2) {
+    float xx1 = fmax(x1 - (w1 / 2), x2 - (w2 / 2));
+    float yy1 = fmax(y1 - (h1 / 2), y2 - (h2 / 2));
+    float xx2 = fmin(x1 + (w1 / 2), x2 + (w2 / 2));
+    float yy2 = fmin(y1 + (h1 / 2), y2 + (h2 / 2));
+
+    float inter_area = fmax(0, xx2 - xx1) * fmax(0, yy2 - yy1);
+    float union_area = w1 * h1 + w2 * h2 - inter_area;
+
+    return inter_area / union_area;
+}
+
+static void non_maximum_suppression(uint8_t* tensor,
+                                    float iou_threshold,
+                                    model_params_t* model_params,
+                                    int* invalid_detections) {
+    int size_per_detection = model_params->size_per_detection;
+    int num_detections     = model_params->num_detections;
+    float qt_zero_point    = model_params->quantization_zero_point;
+    float qt_scale         = model_params->quantization_scale;
+
+    for (int i = 0; i < num_detections; i++) {
+        if (invalid_detections[i])  // Skip comparison if detection is already invalid
+            continue;
+
+        float x1 = (tensor[size_per_detection * i + 0] - qt_zero_point) * qt_scale;
+        float y1 = (tensor[size_per_detection * i + 1] - qt_zero_point) * qt_scale;
+        float w1 = (tensor[size_per_detection * i + 2] - qt_zero_point) * qt_scale;
+        float h1 = (tensor[size_per_detection * i + 3] - qt_zero_point) * qt_scale;
+
+        // use max class probability as objectness
+        float max_prob1 = -1.0f;
+        for (int cls = 4; cls < size_per_detection; cls++) {
+            float prob = (tensor[size_per_detection * i + cls] - qt_zero_point) * qt_scale;
+            if (prob > max_prob1)
+                max_prob1 = prob;
+        }
+
+        for (int j = i + 1; j < num_detections; j++) {
+            if (invalid_detections[j])  // Skip comparison if detection is already invalid
+                continue;
+
+            float x2 = (tensor[size_per_detection * j + 0] - qt_zero_point) * qt_scale;
+            float y2 = (tensor[size_per_detection * j + 1] - qt_zero_point) * qt_scale;
+            float w2 = (tensor[size_per_detection * j + 2] - qt_zero_point) * qt_scale;
+            float h2 = (tensor[size_per_detection * j + 3] - qt_zero_point) * qt_scale;
+
+            // use max class probability as objectness
+            float max_prob2 = -1.0f;
+            for (int cls = 4; cls < size_per_detection; cls++) {
+                float prob = (tensor[size_per_detection * j + cls] - qt_zero_point) * qt_scale;
+                if (prob > max_prob2)
+                    max_prob2 = prob;
+            }
+
+            if (intersection_over_union(x1, y1, w1, h1, x2, y2, w2, h2) > iou_threshold) {
+                // invalidates the detection with lowest object likelihood score
+                if (max_prob1 > max_prob2) {
+                    invalid_detections[j] = 1;
+                } else {
+                    invalid_detections[i] = 1;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+static void filter_detections(uint8_t* tensor,
+                              float conf_threshold,
+                              float iou_threshold,
+                              model_params_t* model_params,
+                              int* invalid_detections) {
+    int size_per_detection = model_params->size_per_detection;
+    int num_detections     = model_params->num_detections;
+    float qt_zero_point    = model_params->quantization_zero_point;
+    float qt_scale         = model_params->quantization_scale;
+
+    // filter by confidence instead of object likelihood
+    for (int i = 0; i < num_detections; i++) {
+        float max_prob = -1.0f;
+        for (int cls = 4; cls < size_per_detection; cls++) {
+            float prob = (tensor[size_per_detection * i + cls] - qt_zero_point) * qt_scale;
+            if (prob > max_prob)
+                max_prob = prob;
+        }
+
+        if (max_prob < conf_threshold) {
+            invalid_detections[i] = 1;
+        } else {
+            invalid_detections[i] = 0;
+        }
+    }
+
+    non_maximum_suppression(tensor, iou_threshold, model_params, invalid_detections);
+}
+
+static void determine_class_and_object_likelihood(uint8_t* tensor,
+                                                  int detection_idx,
+                                                  int size_per_detection,
+                                                  float qt_zero_point,
+                                                  float qt_scale,
+                                                  float* highest_class_likelihood,
+                                                  int* label_idx,
+                                                  float* object_likelihood) {
+    // Find what class this object is
+    for (int j = 4; j < size_per_detection; j++) {
+        float class_likelihood =
+            (tensor[size_per_detection * detection_idx + j] - qt_zero_point) * qt_scale;
+        if (class_likelihood > *highest_class_likelihood) {
+            *highest_class_likelihood = class_likelihood;
+            *label_idx                = j - 4;
+        }
+    }
+
+    *object_likelihood =
+        (tensor[size_per_detection * detection_idx + 4] - qt_zero_point) * qt_scale;
 }
 
 static void render_plate_text(gpointer rendering_context,
@@ -136,50 +328,109 @@ static void parse_licence_plate(uint8_t* tensor,
                                 char** labels,
                                 size_t num_labels,
                                 char* plate_string,
-                                size_t max_string_len) {
-    int sequence_length = model_params->num_detections;
-    int num_classes     = model_params->num_classes;
-    float qt_zero_point = model_params->quantization_zero_point;
-    float qt_scale      = model_params->quantization_scale;
+                                size_t max_string_len,
+                                int* invalid_detections,
+                                bbox_t* bbox) {
+    int num_detections = model_params->num_detections;
+    // int num_classes        = model_params->num_classes;
+    int size_per_detection = model_params->size_per_detection;
+    float qt_zero_point    = model_params->quantization_zero_point;
+    float qt_scale         = model_params->quantization_scale;
 
-    syslog(LOG_INFO, "=== Analyzing predictions ===");
-    syslog(LOG_INFO,
-           "num_labels=%zu, num_classes=%d, sequence_length=%d",
-           num_labels,
-           num_classes,
-           sequence_length);
+    typedef struct {
+        float x, y, w, h;
+        char character;
+        float confidence;
+    } char_detection_t;
 
-    int string_idx  = 0;
-    plate_string[0] = '\0';
+    char_detection_t valid_chars[num_detections];
+    int valid_count = 0;
 
-    for (int pos = 0; pos < sequence_length; pos++) {
-        if (string_idx >= (int)max_string_len - 1) {
-            break;
-        }
+    bbox_clear(bbox);
 
-        float max_prob     = -1.0f;
-        int best_class_idx = -1;
-
-        for (int cls = 0; cls < num_classes; cls++) {
-            int tensor_idx    = pos * num_classes + cls;
-            float probability = (tensor[tensor_idx] - qt_zero_point) * qt_scale;
-
-            if (probability > max_prob) {
-                max_prob       = probability;
-                best_class_idx = cls;
-            }
-        }
-
-        if (max_prob < 0.5 || best_class_idx < 0 || best_class_idx >= (int)num_labels) {
+    for (int det = 0; det < num_detections; det++) {
+        if (invalid_detections[det] == 1) {
             continue;
         }
 
-        char predicted_char        = labels[best_class_idx][0];
-        plate_string[string_idx++] = predicted_char;
-        plate_string[string_idx]   = '\0';
+        int base_idx = det * size_per_detection;
+        float x      = (tensor[base_idx + 0] - qt_zero_point) * qt_scale;
+        float y      = (tensor[base_idx + 1] - qt_zero_point) * qt_scale;
+        float w      = (tensor[base_idx + 2] - qt_zero_point) * qt_scale;
+        float h      = (tensor[base_idx + 3] - qt_zero_point) * qt_scale;
+
+        float highest_class_likelihood = 0.0f;
+        int label_idx                  = 0;
+        float object_likelihood        = 0.0f;
+
+        determine_class_and_object_likelihood(tensor,
+                                              det,
+                                              size_per_detection,
+                                              qt_zero_point,
+                                              qt_scale,
+                                              &highest_class_likelihood,
+                                              &label_idx,
+                                              &object_likelihood);
+
+        if (label_idx < 0 || label_idx >= (int)num_labels) {
+            continue;
+        }
+
+        valid_chars[valid_count].x          = x;
+        valid_chars[valid_count].y          = y;
+        valid_chars[valid_count].w          = w;
+        valid_chars[valid_count].h          = h;
+        valid_chars[valid_count].character  = labels[label_idx][0];
+        valid_chars[valid_count].confidence = highest_class_likelihood;
+
+        float x1, y1, x2, y2;
+        determine_bbox_coordinates(tensor,
+                                   det,
+                                   size_per_detection,
+                                   qt_zero_point,
+                                   qt_scale,
+                                   &x1,
+                                   &y1,
+                                   &x2,
+                                   &y2);
+
+        syslog(LOG_INFO,
+               "Char %d: '%c' at [%.2f,%.2f,%.2f,%.2f], conf=%.2f",
+               valid_count,
+               valid_chars[valid_count].character,
+               x1,
+               y1,
+               x2,
+               y2,
+               highest_class_likelihood);
+
+        bbox_coordinates_frame_normalized(bbox);
+        bbox_rectangle(bbox, x1, y1, x2, y2);
+
+        valid_count++;
     }
 
-    syslog(LOG_INFO, "Detected license plate: %s", plate_string);
+    syslog(LOG_INFO, "Found %d valid characters after NMS", valid_count);
+
+    // sort by x coord
+    for (int i = 0; i < valid_count - 1; i++) {
+        for (int j = 0; j < valid_count - i - 1; j++) {
+            if (valid_chars[j].x > valid_chars[j + 1].x) {
+                char_detection_t temp = valid_chars[j];
+                valid_chars[j]        = valid_chars[j + 1];
+                valid_chars[j + 1]    = temp;
+            }
+        }
+    }
+
+    // build final string
+    int string_idx = 0;
+    for (int i = 0; i < valid_count && string_idx < (int)max_string_len - 1; i++) {
+        plate_string[string_idx++] = valid_chars[i].character;
+    }
+    plate_string[string_idx] = '\0';
+
+    syslog(LOG_INFO, "Final license plate: '%s'", plate_string);
 }
 
 static unsigned int elapsed_ms(struct timeval* start_ts, struct timeval* end_ts) {
@@ -192,6 +443,7 @@ int main(int argc, char** argv) {
     img_provider_t* image_provider        = NULL;
     model_provider_t* model_provider      = NULL;
     model_tensor_output_t* tensor_outputs = NULL;
+    bbox_t* bbox                          = NULL;
 
     GError* overlay_error = NULL;
     gint overlay_id_text  = -1;
@@ -216,7 +468,7 @@ int main(int argc, char** argv) {
     model_params->num_classes             = NUM_CLASSES;
     model_params->num_detections          = NUM_DETECTIONS;
     model_params->size_per_detection =
-        5 + NUM_CLASSES;  // Each detection consists of [x, y, w, h, object_likelihood,
+        4 + NUM_CLASSES;  // Each detection consists of [x, y, w, h,
                           // class1_likelihood, class2_likelihood, class3_likelihood, ... ]
 
     syslog(LOG_INFO,
@@ -228,12 +480,17 @@ int main(int argc, char** argv) {
     syslog(LOG_INFO, "Number of classes: %d", model_params->num_classes);
     syslog(LOG_INFO, "Number of detections: %d", model_params->num_detections);
 
+    int invalid_detections[model_params->num_detections];
+
     // Create a new axparameter instance
     GError* axparameter_error       = NULL;
     AXParameter* axparameter_handle = ax_parameter_new(APP_NAME, &axparameter_error);
     if (axparameter_handle == NULL) {
         panic("%s", axparameter_error->message);
     }
+
+    float conf_threshold = ax_parameter_get_int(axparameter_handle, "ConfThresholdPercent") / 100.0;
+    float iou_threshold  = ax_parameter_get_int(axparameter_handle, "IouThresholdPercent") / 100.0;
 
     ax_parameter_free(axparameter_handle);
 
@@ -300,6 +557,8 @@ int main(int argc, char** argv) {
     if (!img_provider_start(image_provider)) {
         panic("%s: Could not start image provider", __func__);
     }
+
+    bbox = setup_bbox();
 
     syslog(LOG_INFO, "Initializing axoverlay for text display");
 
@@ -429,13 +688,21 @@ int main(int argc, char** argv) {
         // Parse the output
         gettimeofday(&start_ts, NULL);
 
+        filter_detections(tensor_data,
+                          conf_threshold,
+                          iou_threshold,
+                          model_params,
+                          invalid_detections);
+
         char plate_string[64] = {0};
         parse_licence_plate(tensor_data,
                             model_params,
                             labels,
                             num_labels,
                             plate_string,
-                            sizeof(plate_string));
+                            sizeof(plate_string),
+                            invalid_detections,
+                            bbox);
 
         syslog(LOG_INFO, "License Plate Text: %s", plate_string);
 
@@ -451,6 +718,10 @@ int main(int argc, char** argv) {
 
         gettimeofday(&end_ts, NULL);
         syslog(LOG_INFO, "Ran parsing for %u ms", elapsed_ms(&start_ts, &end_ts));
+
+        if (!bbox_commit(bbox, 0u)) {
+            panic("Failed to commit box drawer");
+        }
 
         // This will allow vdo to fill this buffer with data again
         if (!vdo_stream_buffer_unref(image_provider->vdo_stream, &vdo_buf, &vdo_error)) {
@@ -483,6 +754,7 @@ end:
     free(tensor_outputs);
     free(labels);
     free(label_file_data);
+    bbox_destroy(bbox);
 
     syslog(LOG_INFO, "Exit %s", argv[0]);
 
