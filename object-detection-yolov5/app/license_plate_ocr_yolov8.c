@@ -256,14 +256,13 @@ static void filter_detections(uint8_t* tensor,
     non_maximum_suppression(tensor, iou_threshold, model_params, invalid_detections);
 }
 
-static void determine_class_and_object_likelihood(uint8_t* tensor,
-                                                  int detection_idx,
-                                                  int size_per_detection,
-                                                  float qt_zero_point,
-                                                  float qt_scale,
-                                                  float* highest_class_likelihood,
-                                                  int* label_idx,
-                                                  float* object_likelihood) {
+static void determine_class_likelihood(uint8_t* tensor,
+                                       int detection_idx,
+                                       int size_per_detection,
+                                       float qt_zero_point,
+                                       float qt_scale,
+                                       float* highest_class_likelihood,
+                                       int* label_idx) {
     // Find what class this object is
     for (int j = 4; j < size_per_detection; j++) {
         float class_likelihood =
@@ -273,9 +272,6 @@ static void determine_class_and_object_likelihood(uint8_t* tensor,
             *label_idx                = j - 4;
         }
     }
-
-    *object_likelihood =
-        (tensor[size_per_detection * detection_idx + 4] - qt_zero_point) * qt_scale;
 }
 
 static void render_plate_text(gpointer rendering_context,
@@ -361,16 +357,14 @@ static void parse_licence_plate(uint8_t* tensor,
 
         float highest_class_likelihood = 0.0f;
         int label_idx                  = 0;
-        float object_likelihood        = 0.0f;
 
-        determine_class_and_object_likelihood(tensor,
-                                              det,
-                                              size_per_detection,
-                                              qt_zero_point,
-                                              qt_scale,
-                                              &highest_class_likelihood,
-                                              &label_idx,
-                                              &object_likelihood);
+        determine_class_likelihood(tensor,
+                                   det,
+                                   size_per_detection,
+                                   qt_zero_point,
+                                   qt_scale,
+                                   &highest_class_likelihood,
+                                   &label_idx);
 
         if (label_idx < 0 || label_idx >= (int)num_labels) {
             continue;
